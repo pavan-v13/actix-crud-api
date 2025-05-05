@@ -3,7 +3,7 @@ use std::{
     str::FromStr,
 };
 
-use actix_web::{delete, get, post, put, web, HttpResponse, Responder};
+use actix_web::{HttpResponse, Responder, delete, get, post, put, web};
 use chrono::NaiveDateTime;
 use heed::RoTxn;
 use serde_json::json;
@@ -12,7 +12,8 @@ use crate::{
     handle,
     helper_functions::{data_with_response_time, data_with_response_time_for_slice, loader},
     struct_definitions::{
-        DBSchema, DBdata, DbEnv, KeySchema, Payments, ProcessingStatusSchema, Status, UpdateDBSchema, UpdatePayment, UpdateProcessingStatusSchema
+        DBSchema, DBdata, DbEnv, KeySchema, Payments, ProcessingStatusSchema, Status,
+        UpdateDBSchema, UpdatePayment, UpdateProcessingStatusSchema,
     },
 };
 
@@ -22,7 +23,6 @@ pub async fn create_record(
     db_handles: web::Data<DBdata>,
     data: web::Json<DBSchema>,
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
-
     let mut wtxn = handle!(db_env.env.write_txn());
     let uuid = uuid::Uuid::new_v4().to_string();
     let uuid = format!("{}-{}", data.opened, uuid);
@@ -73,7 +73,6 @@ pub async fn create_processing_state(
     data: web::Json<ProcessingStatusSchema>,
     path: web::Path<String>,
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
-
     let mut wtxn = handle!(db_env.env.write_txn());
     let key = path.into_inner();
 
@@ -86,7 +85,11 @@ pub async fn create_processing_state(
 
     let indexing_key = format!("{key}-{:?}", data.last_modified);
 
-    handle!(db_handles.db_data.processing_state.put(&mut wtxn, &indexing_key, &processing_state_data));
+    handle!(db_handles.db_data.processing_state.put(
+        &mut wtxn,
+        &indexing_key,
+        &processing_state_data
+    ));
 
     let start = std::time::Instant::now();
     handle!(wtxn.commit());
@@ -102,9 +105,8 @@ pub async fn create_payment(
     db_handles: web::Data<DBdata>,
     db_env: web::Data<DbEnv>,
     path: web::Path<String>,
-    data: web::Json<Payments>
+    data: web::Json<Payments>,
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
-
     let mut wtxn = handle!(db_env.env.write_txn());
     let permit_number = path.into_inner();
     let key = format!("{permit_number}-{:?}", data.date);
@@ -113,14 +115,19 @@ pub async fn create_payment(
         date: data.date,
         payment: data.payment.to_owned(),
         amount: data.amount,
-        status: data.status.to_owned()
+        status: data.status.to_owned(),
     };
 
-    handle!(db_handles.db_data.payments_db.put(&mut wtxn, &key, &payment_data));
-    
+    handle!(
+        db_handles
+            .db_data
+            .payments_db
+            .put(&mut wtxn, &key, &payment_data)
+    );
+
     let start = std::time::Instant::now();
     handle!(wtxn.commit());
-    let duration= start.elapsed().as_micros();
+    let duration = start.elapsed().as_micros();
 
     Ok(HttpResponse::Ok().body(format!("Successfully added payment data for permit_numer: {permit_number}\nResponse Time: {duration}")))
 }
@@ -131,7 +138,6 @@ pub async fn read_payment_details(
     db_env: web::Data<DbEnv>,
     path: web::Path<String>,
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
-
     let rtxn = handle!(db_env.env.read_txn());
     let permit_numbers = path.into_inner();
     let permit_numbers: Vec<&str> = permit_numbers.split(",").collect();
@@ -177,14 +183,13 @@ pub async fn read_processing_state(
         let db = db_handles.db_data.processing_state;
         let mut cursor = db.prefix_iter(&rtxn, &key)?;
         let mut result = vec![];
-    
+
         while let Some(Ok((key, value))) = cursor.next() {
             result.push((key, value))
         }
 
         final_result.push(result);
     }
-
 
     let duration = start.elapsed().as_micros();
     let response = json!({
@@ -195,14 +200,12 @@ pub async fn read_processing_state(
     Ok(HttpResponse::Ok().json(response))
 }
 
-
 #[get("/read-record-by-uuid/{key}")]
 pub async fn read_record_by_uuid(
     db: web::Data<DbEnv>,
     db_handles: web::Data<DBdata>,
     path: web::Path<String>,
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
-
     let start = std::time::Instant::now();
 
     let key = path.into_inner();
@@ -251,7 +254,7 @@ pub async fn read_record_by_uuid(
 pub async fn read_record(
     db: web::Data<DbEnv>,
     db_handles: web::Data<DBdata>,
-    query: web::Json<HashMap<String, String>>,
+    query: Option<web::Json<HashMap<String, String>>>,
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
 
@@ -260,8 +263,416 @@ pub async fn read_record(
     let cursor = handle!(main_db.iter(&rtxn));
     let stats = handle!(main_db.stat(&rtxn));
     let entries = stats.entries;
-    
-    if query.is_empty() {
+
+    if let Some(query) = query {
+        if query.is_empty() {
+            let records: Vec<(String, DBSchema)> = cursor
+                .take(50)
+                .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
+                .collect();
+
+            let duration = start.elapsed();
+            let response = data_with_response_time(duration, records, entries);
+
+            return Ok(HttpResponse::Ok().json(response));
+        }
+
+        let page = match query.get("page") {
+            Some(page) => page,
+            None => "",
+        };
+        let county = match query.get("county") {
+            Some(county) => county,
+            None => "",
+        };
+        let client = match query.get("client") {
+            Some(client) => client,
+            None => "",
+        };
+        let status = match query.get("county_status") {
+            Some(status) => status,
+            None => "",
+        };
+        let pagination = match query.get("records_per_page") {
+            Some(pagination) => pagination,
+            None => "",
+        };
+        let sort = match query.get("sort") {
+            Some(sorted) => sorted,
+            None => "",
+        };
+        let sort_key = match query.get("sort_key") {
+            Some(sort_key) => sort_key,
+            None => "",
+        };
+
+        if county.is_empty() && client.is_empty() && status.is_empty() {
+            if !page.is_empty() {
+                let stats = handle!(main_db.stat(&rtxn));
+                let entires = stats.entries;
+                let mut page: usize = match page.parse() {
+                    Ok(num) => num,
+                    Err(_) => {
+                        return Ok(HttpResponse::Ok()
+                            .body("Enter a valid page number. It must be an integer."));
+                    }
+                };
+
+                if pagination.is_empty() {
+                    let page_in_db = entires / 50;
+                    if sort.is_empty() || sort == "asc" {
+                        if entires < page * 50 {
+                            return Ok(HttpResponse::Ok()
+                                .body(format!("The DB only has {page_in_db} Pages")));
+                        }
+
+                        if page == 1 {
+                            page -= 1
+                        }
+
+                        let records: Vec<(String, DBSchema)> = cursor
+                            .skip(page * 50)
+                            .take(50)
+                            .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
+                            .collect();
+
+                        let duration = start.elapsed();
+                        let response = data_with_response_time(duration, records, entires);
+
+                        return Ok(HttpResponse::Ok().json(response));
+                    } else {
+                        if entires < page * 50 {
+                            return Ok(HttpResponse::Ok()
+                                .body(format!("The DB only has {page_in_db} Pages")));
+                        }
+
+                        page = page_in_db - page - 1;
+                        let records: Vec<(String, DBSchema)> = cursor
+                            .skip(page * 50)
+                            .take(50)
+                            .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
+                            .collect();
+
+                        let duration = start.elapsed();
+                        let response = data_with_response_time(duration, records, entires);
+
+                        return Ok(HttpResponse::Ok().json(response));
+                    }
+                } else if !pagination.is_empty() {
+                    let pagination = match pagination.parse() {
+                        Ok(num) => num,
+                        Err(_) => {
+                            return Ok(HttpResponse::Ok()
+                                .body("Enter a valid page number. It must be an integer."));
+                        }
+                    };
+                    let page_in_db = entires / pagination;
+
+                    if sort.is_empty() || sort == "asc" {
+                        if entires < page * pagination {
+                            return Ok(HttpResponse::Ok()
+                                .body(format!("The DB only has {page_in_db} Pages")));
+                        }
+
+                        if page == 1 {
+                            page -= 1
+                        }
+
+                        let records: Vec<(String, DBSchema)> = cursor
+                            .skip(page * pagination)
+                            .take(pagination)
+                            .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
+                            .collect();
+
+                        let duration = start.elapsed();
+                        let response = data_with_response_time(duration, records, entries);
+
+                        return Ok(HttpResponse::Ok().json(response));
+                    } else {
+                        if entires < page * pagination {
+                            return Ok(HttpResponse::Ok()
+                                .body(format!("The DB only has {page_in_db} Pages")));
+                        }
+
+                        page = page_in_db - page - 1;
+                        let records: Vec<(String, DBSchema)> = cursor
+                            .skip(page * pagination)
+                            .take(pagination)
+                            .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
+                            .collect();
+
+                        let duration = start.elapsed();
+                        let response = data_with_response_time(duration, records, entires);
+
+                        return Ok(HttpResponse::Ok().json(response));
+                    }
+                }
+            } else if page.is_empty() {
+                if !pagination.is_empty() {
+                    let stats = handle!(main_db.stat(&rtxn));
+                    let entires = stats.entries;
+                    let pagination = match pagination.parse() {
+                        Ok(num) => num,
+                        Err(_) => {
+                            return Ok(HttpResponse::Ok()
+                                .body("Enter a valid page number. It must be an integer."));
+                        }
+                    };
+
+                    let page_in_db = entires / pagination;
+                    if sort.is_empty() || sort == "asc" {
+                        let records: Vec<(String, DBSchema)> = cursor
+                            .take(pagination)
+                            .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
+                            .collect();
+
+                        let duration = start.elapsed();
+                        let response = data_with_response_time(duration, records, entires);
+
+                        return Ok(HttpResponse::Ok().json(response));
+                    } else {
+                        let records: Vec<(String, DBSchema)> = cursor
+                            .skip(page_in_db - pagination)
+                            .take(pagination)
+                            .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
+                            .collect();
+
+                        let duration = start.elapsed();
+                        let response = data_with_response_time(duration, records, entires);
+
+                        return Ok(HttpResponse::Ok().json(response));
+                    }
+                } else if pagination.is_empty() {
+                    let stats = handle!(main_db.stat(&rtxn));
+                    let entires = stats.entries;
+
+                    if sort.is_empty() || sort == "asc" {
+                        let records: Vec<(String, DBSchema)> = cursor
+                            .take(50)
+                            .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
+                            .collect();
+
+                        let duration = start.elapsed();
+                        let response = data_with_response_time(duration, records, entires);
+
+                        return Ok(HttpResponse::Ok().json(response));
+                    } else {
+                        let skip = entires - 50;
+                        let records: Vec<(String, DBSchema)> = cursor
+                            .skip(skip)
+                            .take(50)
+                            .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
+                            .collect();
+
+                        let duration = start.elapsed();
+                        let response = data_with_response_time(duration, records, entires);
+
+                        return Ok(HttpResponse::Ok().json(response));
+                    }
+                }
+            }
+        }
+
+        if !county.is_empty() && !client.is_empty() && !status.is_empty() {
+            let status = match Status::from_str(status) {
+                Ok(stat) => stat,
+                Err(_) => {
+                    return Ok(HttpResponse::Ok().body("The given status is not valid."));
+                }
+            };
+            let key = KeySchema {
+                county: county.to_string(),
+                client: client.to_string(),
+                county_status: status,
+            };
+
+            let set = handle!(db_handles.db_data.composite_index.get(&rtxn, &key));
+
+            if let Some(set) = set {
+                let mut records =
+                    match helper_function_for_retrieving_data(&set, &rtxn, &db_handles) {
+                        Ok(records) => records,
+                        Err(_) => return Ok(HttpResponse::Ok().body("Failed to retrieve records")),
+                    };
+
+                let pagination: usize = match pagination.parse() {
+                    Ok(pagination) => pagination,
+                    Err(_) => 0,
+                };
+
+                if (sort.is_empty() || sort == "asc") && sort_key.is_empty() {
+                    records.sort_by_key(|schema| schema.opened);
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                } else if sort == "dsc" && sort_key.is_empty() {
+                    records.sort_by_key(|schema| std::cmp::Reverse(schema.opened));
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if (sort.is_empty() || sort == "asc") && sort_key == "opened" {
+                    records.sort_by_key(|schema| schema.opened);
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                } else if sort == "dsc" && sort_key == "opened" {
+                    records.sort_by_key(|schema| std::cmp::Reverse(schema.opened));
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if (sort.is_empty() || sort == "asc") && sort_key == "last_updated" {
+                    records.sort_by_key(|schema| schema.last_updated);
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                } else if sort == "dsc" && sort_key == "last_updated" {
+                    records.sort_by_key(|schema| std::cmp::Reverse(schema.last_updated));
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if (sort.is_empty() || sort == "asc") && sort_key == "status_updated" {
+                    records.sort_by_key(|schema| schema.status_updated);
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                } else if sort == "dsc" && sort_key == "status_updated" {
+                    records.sort_by_key(|schema| std::cmp::Reverse(schema.status_updated));
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if (sort.is_empty() || sort == "asc") && sort_key == "manual_status" {
+                    records.sort_by_key(|schema| schema.manual_status.clone());
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                } else if sort == "dsc" && sort_key == "manual_status" {
+                    records.sort_by_key(|schema| std::cmp::Reverse(schema.manual_status.clone()));
+
+                    if pagination != 0 {
+                        if let Some(slice) = records.get(..pagination) {
+                            let duration = start.elapsed();
+                            let response =
+                                data_with_response_time_for_slice(duration, slice, set.len());
+
+                            return Ok(HttpResponse::Ok().json(response));
+                        }
+                    }
+                    let duration = start.elapsed();
+                    let response = data_with_response_time_for_slice(duration, &records, set.len());
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+            }
+            return Ok(HttpResponse::Ok().body("No Records Found"));
+        }
+    } else {
         let records: Vec<(String, DBSchema)> = cursor
             .take(50)
             .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
@@ -271,405 +682,6 @@ pub async fn read_record(
         let response = data_with_response_time(duration, records, entries);
 
         return Ok(HttpResponse::Ok().json(response));
-    }
-
-    let page = match query.get("page") {
-        Some(page) => page,
-        None => "",
-    };
-    let county = match query.get("county") {
-        Some(county) => county,
-        None => "",
-    };
-    let client = match query.get("client") {
-        Some(client) => client,
-        None => "",
-    };
-    let status = match query.get("county_status") {
-        Some(status) => status,
-        None => "",
-    };
-    let pagination = match query.get("records_per_page") {
-        Some(pagination) => pagination,
-        None => "",
-    };
-    let sort = match query.get("sort") {
-        Some(sorted) => sorted,
-        None => "",
-    };
-    let sort_key = match query.get("sort_key") {
-        Some(sort_key) => sort_key,
-        None => "",
-    };
-
-    if county.is_empty() && client.is_empty() && status.is_empty() {
-        if !page.is_empty() {
-            let stats = handle!(main_db.stat(&rtxn));
-            let entires = stats.entries;
-            let mut page: usize = match page.parse() {
-                Ok(num) => num,
-                Err(_) => {
-                    return Ok(HttpResponse::Ok()
-                        .body("Enter a valid page number. It must be an integer."));
-                }
-            };
-
-            if pagination.is_empty() {
-                let page_in_db = entires / 50;
-                if sort.is_empty() || sort == "asc" {
-                    if entires < page * 50 {
-                        return Ok(
-                            HttpResponse::Ok().body(format!("The DB only has {page_in_db} Pages"))
-                        );
-                    }
-
-                    if page == 1 {
-                        page -= 1
-                    }
-
-                    let records: Vec<(String, DBSchema)> = cursor
-                        .skip(page * 50)
-                        .take(50)
-                        .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
-                        .collect();
-
-                    let duration = start.elapsed();
-                    let response = data_with_response_time(duration, records, entires);
-
-                    return Ok(HttpResponse::Ok().json(response));
-                } else {
-                    if entires < page * 50 {
-                        return Ok(
-                            HttpResponse::Ok().body(format!("The DB only has {page_in_db} Pages"))
-                        );
-                    }
-
-                    page = page_in_db - page - 1;
-                    let records: Vec<(String, DBSchema)> = cursor
-                        .skip(page * 50)
-                        .take(50)
-                        .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
-                        .collect();
-
-                    let duration = start.elapsed();
-                    let response = data_with_response_time(duration, records, entires);
-
-                    return Ok(HttpResponse::Ok().json(response));
-                }
-            } else if !pagination.is_empty() {
-                let pagination = match pagination.parse() {
-                    Ok(num) => num,
-                    Err(_) => {
-                        return Ok(HttpResponse::Ok()
-                            .body("Enter a valid page number. It must be an integer."));
-                    }
-                };
-                let page_in_db = entires / pagination;
-
-                if sort.is_empty() || sort == "asc" {
-                    if entires < page * pagination {
-                        return Ok(
-                            HttpResponse::Ok().body(format!("The DB only has {page_in_db} Pages"))
-                        );
-                    }
-
-                    if page == 1 {
-                        page -= 1
-                    }
-
-                    let records: Vec<(String, DBSchema)> = cursor
-                        .skip(page * pagination)
-                        .take(pagination)
-                        .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
-                        .collect();
-
-                    let duration = start.elapsed();
-                    let response = data_with_response_time(duration, records, entries);
-
-                    return Ok(HttpResponse::Ok().json(response));
-                } else {
-                    if entires < page * pagination {
-                        return Ok(
-                            HttpResponse::Ok().body(format!("The DB only has {page_in_db} Pages"))
-                        );
-                    }
-
-                    page = page_in_db - page - 1;
-                    let records: Vec<(String, DBSchema)> = cursor
-                        .skip(page * pagination)
-                        .take(pagination)
-                        .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
-                        .collect();
-
-                    let duration = start.elapsed();
-                    let response = data_with_response_time(duration, records, entires);
-
-                    return Ok(HttpResponse::Ok().json(response));
-                }
-            }
-        } else if page.is_empty() {
-            if !pagination.is_empty() {
-                let stats = handle!(main_db.stat(&rtxn));
-                let entires = stats.entries;
-                let pagination = match pagination.parse() {
-                    Ok(num) => num,
-                    Err(_) => {
-                        return Ok(HttpResponse::Ok()
-                            .body("Enter a valid page number. It must be an integer."));
-                    }
-                };
-
-                let page_in_db = entires / pagination;
-                if sort.is_empty() || sort == "asc" {
-                    let records: Vec<(String, DBSchema)> = cursor
-                        .take(pagination)
-                        .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
-                        .collect();
-
-                    let duration = start.elapsed();
-                    let response = data_with_response_time(duration, records, entires);
-
-                    return Ok(HttpResponse::Ok().json(response));
-                } else {
-                    let records: Vec<(String, DBSchema)> = cursor
-                        .skip(page_in_db - pagination)
-                        .take(pagination)
-                        .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
-                        .collect();
-
-                    let duration = start.elapsed();
-                    let response = data_with_response_time(duration, records, entires);
-
-                    return Ok(HttpResponse::Ok().json(response));
-                }
-            } else if pagination.is_empty() {
-                let stats = handle!(main_db.stat(&rtxn));
-                let entires = stats.entries;
-
-                if sort.is_empty() || sort == "asc" {
-                    let records: Vec<(String, DBSchema)> = cursor
-                        .take(50)
-                        .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
-                        .collect();
-
-                    let duration = start.elapsed();
-                    let response = data_with_response_time(duration, records, entires);
-
-                    return Ok(HttpResponse::Ok().json(response));
-                } else {
-                    let skip = entires - 50;
-                    let records: Vec<(String, DBSchema)> = cursor
-                        .skip(skip)
-                        .take(50)
-                        .filter_map(|res| res.ok().map(|(key, value)| (key.to_string(), value)))
-                        .collect();
-
-                    let duration = start.elapsed();
-                    let response = data_with_response_time(duration, records, entires);
-
-                    return Ok(HttpResponse::Ok().json(response));
-                }
-            }
-        }
-    }
-
-    if !county.is_empty() && !client.is_empty() && !status.is_empty() {
-        let status = match Status::from_str(status) {
-            Ok(stat) => stat,
-            Err(_) => {
-                return Ok(HttpResponse::Ok().body("The given status is not valid."));
-            }
-        };
-        let key = KeySchema {
-            county: county.to_string(),
-            client: client.to_string(),
-            county_status: status,
-        };
-
-        let set = handle!(db_handles.db_data.composite_index.get(&rtxn, &key));
-
-        if let Some(set) = set {
-            let mut records = match helper_function_for_retrieving_data(&set, &rtxn, &db_handles) {
-                Ok(records) => records,
-                Err(_) => return Ok(HttpResponse::Ok().body("Failed to retrieve records")),
-            };
-
-            let pagination: usize = match pagination.parse() {
-                Ok(pagination) => pagination,
-                Err(_) => 0,
-            };
-
-            if (sort.is_empty() || sort == "asc") && sort_key.is_empty() {
-                records.sort_by_key(|schema| schema.opened);
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            } else if sort == "dsc" && sort_key.is_empty() {
-                records.sort_by_key(|schema| std::cmp::Reverse(schema.opened));
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            }
-
-            if (sort.is_empty() || sort == "asc") && sort_key == "opened" {
-                records.sort_by_key(|schema| schema.opened);
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            } else if sort == "dsc" && sort_key == "opened" {
-                records.sort_by_key(|schema| std::cmp::Reverse(schema.opened));
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            }
-
-            if (sort.is_empty() || sort == "asc") && sort_key == "last_updated" {
-                records.sort_by_key(|schema| schema.last_updated);
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            } else if sort == "dsc" && sort_key == "last_updated" {
-                records.sort_by_key(|schema| std::cmp::Reverse(schema.last_updated));
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            }
-
-            if (sort.is_empty() || sort == "asc") && sort_key == "status_updated" {
-                records.sort_by_key(|schema| schema.status_updated);
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            } else if sort == "dsc" && sort_key == "status_updated" {
-                records.sort_by_key(|schema| std::cmp::Reverse(schema.status_updated));
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            }
-
-            if (sort.is_empty() || sort == "asc") && sort_key == "manual_status" {
-                records.sort_by_key(|schema| schema.manual_status.clone());
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            } else if sort == "dsc" && sort_key == "manual_status" {
-                records.sort_by_key(|schema| std::cmp::Reverse(schema.manual_status.clone()));
-
-                if pagination != 0 {
-                    if let Some(slice) = records.get(..pagination) {
-                        let duration = start.elapsed();
-                        let response =
-                            data_with_response_time_for_slice(duration, slice, set.len());
-
-                        return Ok(HttpResponse::Ok().json(response));
-                    }
-                }
-                let duration = start.elapsed();
-                let response = data_with_response_time_for_slice(duration, &records, set.len());
-
-                return Ok(HttpResponse::Ok().json(response));
-            }
-        }
-        return Ok(HttpResponse::Ok().body("No Records Found"));
     }
 
     Ok(HttpResponse::Ok().body("Couldn't read From DataBase"))
@@ -701,7 +713,6 @@ pub async fn update_records(
     path: web::Path<String>,
     updated_data: web::Json<UpdateDBSchema>,
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
-
     let mut wtxn = handle!(db_env.env.write_txn());
     let uuid = path.into_inner();
 
@@ -813,15 +824,13 @@ pub async fn update_records(
     Ok(HttpResponse::Ok().body("Failed to update the Record\nNo Record Exists"))
 }
 
-
 #[put("/update-processing-status/{permit_number}/{last_updated}")]
 pub async fn update_processing_status(
     db_env: web::Data<DbEnv>,
     db_handles: web::Data<DBdata>,
     path: web::Path<(String, String)>,
-    updated_data: web::Json<UpdateProcessingStatusSchema>
+    updated_data: web::Json<UpdateProcessingStatusSchema>,
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
-
     let mut wtxn = handle!(db_env.env.write_txn());
     let path = path.into_inner();
     let mut key = format!("{}-{}", path.0, path.1);
@@ -843,17 +852,27 @@ pub async fn update_processing_status(
             handle!(db_handles.db_data.processing_state.delete(&mut wtxn, &key));
             key = format!("{}-{:?}", path.0, last_modified);
         }
-        
-        handle!(db_handles.db_data.processing_state.put(&mut wtxn, &key, &record));
+
+        handle!(
+            db_handles
+                .db_data
+                .processing_state
+                .put(&mut wtxn, &key, &record)
+        );
     } else {
-        return Ok(HttpResponse::Ok().body(format!("No record found with the permit number: {}", path.0)))
+        return Ok(HttpResponse::Ok().body(format!(
+            "No record found with the permit number: {}",
+            path.0
+        )));
     }
 
     let start = std::time::Instant::now();
     handle!(wtxn.commit());
     let duration = start.elapsed().as_micros();
 
-    Ok(HttpResponse::Ok().body(format!("Successfully updated the processing state\nResponse Time: {duration}")))
+    Ok(HttpResponse::Ok().body(format!(
+        "Successfully updated the processing state\nResponse Time: {duration}"
+    )))
 }
 
 #[put("/update-payment-details/{permit_number}/{date}")]
@@ -863,7 +882,6 @@ pub async fn update_payment_details(
     path: web::Path<(String, String)>,
     updated_data: web::Json<UpdatePayment>,
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
-
     let mut wtxn = handle!(db_env.env.write_txn());
     let path = path.into_inner();
     let mut key = format!("{}-{}", path.0, path.1);
@@ -889,15 +907,19 @@ pub async fn update_payment_details(
         }
         handle!(db_handles.db_data.payments_db.put(&mut wtxn, &key, &record));
     } else {
-        return Ok(HttpResponse::Ok().body(format!("No record found with the permit number: {}", path.0)))
+        return Ok(HttpResponse::Ok().body(format!(
+            "No record found with the permit number: {}",
+            path.0
+        )));
     }
 
     let start = std::time::Instant::now();
     handle!(wtxn.commit());
     let duration = start.elapsed().as_micros();
 
-    Ok(HttpResponse::Ok().body(format!("Successfully updated the processing state\nResponse Time: {duration}")))
-
+    Ok(HttpResponse::Ok().body(format!(
+        "Successfully updated the processing state\nResponse Time: {duration}"
+    )))
 }
 
 #[delete("/delete-record/{uuid}")]
