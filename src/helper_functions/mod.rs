@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use fake::{Fake, Faker};
 use futures::stream::{FuturesUnordered, StreamExt};
 use reqwest::Client;
@@ -56,7 +56,7 @@ pub async fn loader() -> Result<(), Box<dyn std::error::Error>> {
                 permit_link: Faker.fake(),
                 permit_number: Faker.fake(),
                 client: CLIENT.choose(&mut rand::rng()).unwrap().to_string().clone(),
-                opened: Utc::now().naive_local(),
+                opened: random_naive_datetime(),
                 last_updated: random_naive_datetime(),
                 status_updated: random_naive_datetime(),
                 county: COUNTY.choose(&mut rand::rng()).unwrap().to_string().clone(),

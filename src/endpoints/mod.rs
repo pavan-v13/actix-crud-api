@@ -1,10 +1,9 @@
 use std::{
-    collections::{HashMap, HashSet},
-    str::FromStr,
+    collections::{HashMap, HashSet}, str::FromStr
 };
 
 use actix_web::{HttpResponse, Responder, delete, get, post, put, web};
-use chrono::NaiveDateTime;
+use chrono::{NaiveDate, NaiveDateTime};
 use heed::RoTxn;
 use serde_json::json;
 
@@ -25,7 +24,7 @@ pub async fn create_record(
 ) -> Result<impl Responder, Box<dyn std::error::Error>> {
     let mut wtxn = handle!(db_env.env.write_txn());
     let uuid = uuid::Uuid::new_v4().to_string();
-    let uuid = format!("{}-{}", data.opened, uuid);
+    let uuid = format!("{:?}-{}", data.opened, uuid);
 
     let key = KeySchema {
         client: data.client.to_owned(),
@@ -248,6 +247,50 @@ pub async fn read_record_by_uuid(
     }
 
     Ok(HttpResponse::Ok().body("No record Found"))
+}
+
+#[get("/read-records-by-opened-date")]
+pub async fn read_records_by_opened_date(
+    db_handles: web::Data<DBdata>,
+    db_env: web::Data<DbEnv>,
+    dates: web::Json<HashMap<String, String>>
+) -> Result<impl Responder, Box<dyn std::error::Error>>{
+    let start = std::time::Instant::now();
+    let rtxn = handle!(db_env.env.read_txn());
+
+    if let Some(start_date) = dates.get("start_date"){
+        if let Some(end_date) = dates.get("end_date"){
+            let start_date = NaiveDate::parse_from_str(&start_date, "%Y-%m-%d").expect("Invalid start_date format, expected YYYY-MM-DD");
+            let end_date = NaiveDate::parse_from_str(&end_date, "%Y-%m-%d").expect("Invalid end_date format, expected YYYY-MM-DD");
+            let mut dates = vec![];
+            let mut current_date = start_date;
+            let mut records = vec![];
+
+            while current_date <= end_date {
+                dates.push(current_date.format("%Y-%m-%d").to_string());
+                current_date += chrono::Duration::days(1);
+            }
+
+            for date in dates {
+                let mut cursor = db_handles.db_data.main_db.prefix_iter(&rtxn, &date)?;
+
+                while let Some(Ok((key, value))) = cursor.next(){
+                    records.push((key, value))
+                }
+            }
+
+            let duration = start.elapsed().as_micros();
+
+            let response = json!({
+                "Response Time": duration,
+                "Data": records
+            });
+
+            return Ok(HttpResponse::Ok().json(response))
+        }
+    }
+
+    Ok(HttpResponse::Ok().body("No Records Found"))
 }
 
 #[get("/read-record")]
