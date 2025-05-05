@@ -1,4 +1,4 @@
-use actix_crud_api::endpoints::{create_payment, create_processing_state, create_record, delete_record, load_the_db, read_payment_details, read_processing_state, read_record, read_record_by_uuid, read_records_by_opened_date, update_payment_details, update_processing_status, update_records};
+use actix_crud_api::endpoints::{create_payment, create_processing_state, create_record, delete_record, load_the_db, read_payment_details, read_permit_with_filter, read_processing_state, read_record, read_record_by_uuid, read_records_by_opened_date, update_payment_details, update_processing_status, update_records};
 use actix_crud_api::struct_definitions::*;
 use actix_crud_api::db_setup::setup_db;
 use actix_web::{App, HttpServer, web};
@@ -58,6 +58,7 @@ async fn main() -> std::io::Result<()> {
             .service(update_payment_details)
             .service(read_payment_details)
             .service(read_records_by_opened_date)
+            .service(read_permit_with_filter)
     })
     .bind(url)?
     .run()

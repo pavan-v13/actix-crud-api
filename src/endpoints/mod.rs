@@ -1,5 +1,6 @@
 use std::{
-    collections::{HashMap, HashSet}, str::FromStr
+    collections::{HashMap, HashSet},
+    str::FromStr,
 };
 
 use actix_web::{HttpResponse, Responder, delete, get, post, put, web};
@@ -253,15 +254,17 @@ pub async fn read_record_by_uuid(
 pub async fn read_records_by_opened_date(
     db_handles: web::Data<DBdata>,
     db_env: web::Data<DbEnv>,
-    dates: web::Json<HashMap<String, String>>
-) -> Result<impl Responder, Box<dyn std::error::Error>>{
+    dates: web::Json<HashMap<String, String>>,
+) -> Result<impl Responder, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
     let rtxn = handle!(db_env.env.read_txn());
 
-    if let Some(start_date) = dates.get("start_date"){
-        if let Some(end_date) = dates.get("end_date"){
-            let start_date = NaiveDate::parse_from_str(&start_date, "%Y-%m-%d").expect("Invalid start_date format, expected YYYY-MM-DD");
-            let end_date = NaiveDate::parse_from_str(&end_date, "%Y-%m-%d").expect("Invalid end_date format, expected YYYY-MM-DD");
+    if let Some(start_date) = dates.get("start_date") {
+        if let Some(end_date) = dates.get("end_date") {
+            let start_date = NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+                .expect("Invalid start_date format, expected YYYY-MM-DD");
+            let end_date = NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+                .expect("Invalid end_date format, expected YYYY-MM-DD");
             let mut dates = vec![];
             let mut current_date = start_date;
             let mut records = vec![];
@@ -274,7 +277,7 @@ pub async fn read_records_by_opened_date(
             for date in dates {
                 let mut cursor = db_handles.db_data.main_db.prefix_iter(&rtxn, &date)?;
 
-                while let Some(Ok((key, value))) = cursor.next(){
+                while let Some(Ok((key, value))) = cursor.next() {
                     records.push((key, value))
                 }
             }
@@ -286,9 +289,192 @@ pub async fn read_records_by_opened_date(
                 "Data": records
             });
 
-            return Ok(HttpResponse::Ok().json(response))
+            return Ok(HttpResponse::Ok().json(response));
         }
     }
+
+    Ok(HttpResponse::Ok().body("No Records Found"))
+}
+
+#[get("/read-permits-with-filter")]
+pub async fn read_permit_with_filter(
+    db_handles: web::Data<DBdata>,
+    db_env: web::Data<DbEnv>,
+    filter_data: Option<web::Json<HashMap<String, String>>>,
+) -> Result<impl Responder, Box<dyn std::error::Error>> {
+    let start = std::time::Instant::now();
+    let rtxn = handle!(db_env.env.read_txn());
+
+    if let Some(filter_data) = filter_data {
+        if let Some(start_date) = filter_data.get("start_date") {
+            if let Some(end_date) = filter_data.get("end_date") {
+                let start_date = NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+                    .expect("Invalid start_date format, expected YYYY-MM-DD");
+                let end_date = NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+                    .expect("Invalid end_date format, expected YYYY-MM-DD");
+                let mut dates = vec![];
+                let mut current_date = start_date;
+                let mut records = vec![];
+    
+                while current_date <= end_date {
+                    dates.push(current_date.format("%Y-%m-%d").to_string());
+                    current_date += chrono::Duration::days(1);
+                }
+    
+                for date in dates {
+                    let mut cursor = db_handles.db_data.main_db.prefix_iter(&rtxn, &date)?;
+    
+                    while let Some(Ok((key, value))) = cursor.next() {
+                        records.push((key, value))
+                    }
+                }
+
+                let county = match filter_data.get("county") {
+                    Some(county) => county,
+                    None => ""
+                };
+                let county_status = match filter_data.get("county_status") {
+                    Some(county_status) => county_status,
+                    None => ""
+                };
+                let client = match filter_data.get("client") {
+                    Some(client) => client,
+                    None => ""
+                };
+
+                if county.is_empty() && county_status.is_empty() && client.is_empty() {
+                    let duration = start.elapsed().as_micros();
+                    let response = json!({
+                        "Response Time": duration,
+                        "Data": records
+                    });
+
+                    return Ok(HttpResponse::Ok().json(response))
+                }
+
+                if !county.is_empty() && county_status.is_empty() && client.is_empty() {
+                    let mut final_results = vec![];
+                    for item in records {
+                        if item.1.county == county {
+                            final_results.push((item.0, item.1))
+                        }
+                    }
+
+                    let duration = start.elapsed().as_micros();
+                    let response = json!({
+                        "Response Time": duration,
+                        "Data": final_results
+                    });
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if county.is_empty() && !county_status.is_empty() && client.is_empty() {
+                    let mut final_results = vec![];
+                    for item in records {
+                        if item.1.county_status.to_string() == county_status {
+                            final_results.push((item.0, item.1))
+                        }
+                    }
+
+                    let duration = start.elapsed().as_micros();
+                    let response = json!({
+                        "Response Time": duration,
+                        "Data": final_results
+                    });
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if county.is_empty() && county_status.is_empty() && !client.is_empty() {
+                    let mut final_results = vec![];
+                    for item in records {
+                        if item.1.client == client {
+                            final_results.push((item.0, item.1))
+                        }
+                    }
+
+                    let duration = start.elapsed().as_micros();
+                    let response = json!({
+                        "Response Time": duration,
+                        "Data": final_results
+                    });
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if !county.is_empty() && !county_status.is_empty() && client.is_empty() {
+                    let mut final_results = vec![];
+                    for item in records {
+                        if item.1.county == county && item.1.county_status.to_string() == county_status {
+                            final_results.push((item.0, item.1))
+                        }
+                    }
+
+                    let duration = start.elapsed().as_micros();
+                    let response = json!({
+                        "Response Time": duration,
+                        "Data": final_results
+                    });
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if county.is_empty() && !county_status.is_empty() && !client.is_empty() {
+                    let mut final_results = vec![];
+                    for item in records {
+                        if item.1.client == client && item.1.county_status.to_string()  == county_status {
+                            final_results.push((item.0, item.1))
+                        }
+                    }
+
+                    let duration = start.elapsed().as_micros();
+                    let response = json!({
+                        "Response Time": duration,
+                        "Data": final_results
+                    });
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if !county.is_empty() && county_status.is_empty() && !client.is_empty() {
+                    let mut final_results = vec![];
+                    for item in records {
+                        if item.1.county == county && item.1.client == client {
+                            final_results.push((item.0, item.1))
+                        }
+                    }
+
+                    let duration = start.elapsed().as_micros();
+                    let response = json!({
+                        "Response Time": duration,
+                        "Data": final_results
+                    });
+
+                    return Ok(HttpResponse::Ok().json(response));
+                }
+
+                if !county.is_empty() && !county_status.is_empty() && !client.is_empty() {
+                    let mut final_results = vec![];
+                    for item in records {
+                        if item.1.county == county && item.1.county_status.to_string() == county_status && item.1.client == client {
+                            final_results.push((item.0, item.1))
+                        }
+                    }
+
+                    let duration = start.elapsed().as_micros();
+                    let response = json!({
+                        "Response Time": duration,
+                        "Data": final_results
+                    });
+
+                    return Ok(HttpResponse::Ok().json(response));
+
+                }
+            }
+        }
+    }
+
 
     Ok(HttpResponse::Ok().body("No Records Found"))
 }
