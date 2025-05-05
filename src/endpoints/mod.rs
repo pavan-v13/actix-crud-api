@@ -293,7 +293,7 @@ pub async fn read_records_by_opened_date(
         }
     }
 
-    Ok(HttpResponse::Ok().body("No Records Found"))
+    Ok(HttpResponse::Ok().body("Both start_date and end_date must exist"))
 }
 
 #[get("/read-permits-with-filter")]
@@ -315,15 +315,15 @@ pub async fn read_permit_with_filter(
                 let mut dates = vec![];
                 let mut current_date = start_date;
                 let mut records = vec![];
-    
+
                 while current_date <= end_date {
                     dates.push(current_date.format("%Y-%m-%d").to_string());
                     current_date += chrono::Duration::days(1);
                 }
-    
+
                 for date in dates {
                     let mut cursor = db_handles.db_data.main_db.prefix_iter(&rtxn, &date)?;
-    
+
                     while let Some(Ok((key, value))) = cursor.next() {
                         records.push((key, value))
                     }
@@ -331,15 +331,15 @@ pub async fn read_permit_with_filter(
 
                 let county = match filter_data.get("county") {
                     Some(county) => county,
-                    None => ""
+                    None => "",
                 };
                 let county_status = match filter_data.get("county_status") {
                     Some(county_status) => county_status,
-                    None => ""
+                    None => "",
                 };
                 let client = match filter_data.get("client") {
                     Some(client) => client,
-                    None => ""
+                    None => "",
                 };
 
                 if county.is_empty() && county_status.is_empty() && client.is_empty() {
@@ -349,7 +349,7 @@ pub async fn read_permit_with_filter(
                         "Data": records
                     });
 
-                    return Ok(HttpResponse::Ok().json(response))
+                    return Ok(HttpResponse::Ok().json(response));
                 }
 
                 if !county.is_empty() && county_status.is_empty() && client.is_empty() {
@@ -406,7 +406,9 @@ pub async fn read_permit_with_filter(
                 if !county.is_empty() && !county_status.is_empty() && client.is_empty() {
                     let mut final_results = vec![];
                     for item in records {
-                        if item.1.county == county && item.1.county_status.to_string() == county_status {
+                        if item.1.county == county
+                            && item.1.county_status.to_string() == county_status
+                        {
                             final_results.push((item.0, item.1))
                         }
                     }
@@ -423,7 +425,9 @@ pub async fn read_permit_with_filter(
                 if county.is_empty() && !county_status.is_empty() && !client.is_empty() {
                     let mut final_results = vec![];
                     for item in records {
-                        if item.1.client == client && item.1.county_status.to_string()  == county_status {
+                        if item.1.client == client
+                            && item.1.county_status.to_string() == county_status
+                        {
                             final_results.push((item.0, item.1))
                         }
                     }
@@ -457,7 +461,10 @@ pub async fn read_permit_with_filter(
                 if !county.is_empty() && !county_status.is_empty() && !client.is_empty() {
                     let mut final_results = vec![];
                     for item in records {
-                        if item.1.county == county && item.1.county_status.to_string() == county_status && item.1.client == client {
+                        if item.1.county == county
+                            && item.1.county_status.to_string() == county_status
+                            && item.1.client == client
+                        {
                             final_results.push((item.0, item.1))
                         }
                     }
@@ -469,14 +476,14 @@ pub async fn read_permit_with_filter(
                     });
 
                     return Ok(HttpResponse::Ok().json(response));
-
                 }
+
+                return Ok(HttpResponse::Ok().body("No Records Found"))
             }
         }
     }
 
-
-    Ok(HttpResponse::Ok().body("No Records Found"))
+    Ok(HttpResponse::Ok().body("Both start_date and end_date must exist"))
 }
 
 #[get("/read-record")]
